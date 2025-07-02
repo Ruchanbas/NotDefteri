@@ -1,54 +1,57 @@
 package com.example.notdefteri
 
+import android.app.*
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.* // Import all Material3 components
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import com.example.notdefteri.ui.theme.DarkColorScheme // Import your custom color schemes
-import com.example.notdefteri.ui.theme.LightColorScheme // Import your custom color schemes
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import com.example.notdefteri.ui.theme.DarkColorScheme
+import com.example.notdefteri.ui.theme.LightColorScheme
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.text.SimpleDateFormat
 import java.util.*
 
-// Data class to represent a single note
 data class Note(
     val title: String,
     val content: String,
     val timestamp: Long = System.currentTimeMillis(),
-    val isFavorite: Boolean = false
+    val isFavorite: Boolean = false,
+    val reminderTime: Long? = null // Hatırlatma zamanı eklendi
 )
 
 class MainActivity : ComponentActivity() {
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            // State to control whether dark theme is active
-            var koyuTema by remember { mutableStateOf(false) }
 
-            // Choose the appropriate color scheme based on the koyuTema state
+        createNotificationChannel(this)
+
+        setContent {
+            var koyuTema by remember { mutableStateOf(false) }
             val renkler = if (koyuTema) DarkColorScheme else LightColorScheme
 
-            // Apply the chosen Material Theme to the entire UI
             MaterialTheme(colorScheme = renkler) {
-                // Surface is a standard Material Design container that uses background color from the theme
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background // Ensures the main background changes with theme
+                    color = MaterialTheme.colorScheme.background
                 ) {
                     NotDefteriEkrani(
                         isDark = koyuTema,
@@ -56,6 +59,20 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+        }
+    }
+
+    private fun createNotificationChannel(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val name = "Hatırlatma Kanalı"
+            val descriptionText = "Notlar için hatırlatma bildirimleri"
+            val importance = NotificationManager.IMPORTANCE_DEFAULT
+            val channel = NotificationChannel("NOT_CHANNEL_ID", name, importance).apply {
+                description = descriptionText
+            }
+            val notificationManager: NotificationManager =
+                context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.createNotificationChannel(channel)
         }
     }
 }
@@ -67,12 +84,17 @@ fun NotDefteriEkrani(
     onToggleTheme: () -> Unit
 ) {
     val context = LocalContext.current
+
     var yeniBaslik by remember { mutableStateOf("") }
     var yeniIcerik by remember { mutableStateOf("") }
-    // Mutable state for the list of notes, loaded from preferences
+    var hatirlatmaZamani by remember { mutableStateOf<Long?>(null) }
+
     var notlar by remember { mutableStateOf(listOf<Note>()) }
 
-    // Load notes when the composable first enters the composition
+    // Bildirim için date/time picker kontrolleri
+    var showDatePicker by remember { mutableStateOf(false) }
+    var showTimePicker by remember { mutableStateOf(false) }
+
     LaunchedEffect(key1 = true) {
         notlar = yukleNotlar(context)
     }
@@ -80,21 +102,17 @@ fun NotDefteriEkrani(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            // The background color is set by the Surface in MainActivity,
-            // but if you remove Surface, this background modifier will be essential.
-            // .background(MaterialTheme.colorScheme.background)
             .padding(16.dp)
     ) {
-        // Top bar with app title and theme toggle button
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically // Center items vertically
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
         ) {
             Text(
                 "Not Defteri",
                 style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onBackground // Text color adapts to background
+                color = MaterialTheme.colorScheme.onBackground
             )
             Button(onClick = onToggleTheme) {
                 Text(if (isDark) "Açık Tema" else "Koyu Tema")
@@ -103,7 +121,6 @@ fun NotDefteriEkrani(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Input field for note title
         OutlinedTextField(
             value = yeniBaslik,
             onValueChange = { yeniBaslik = it },
@@ -113,19 +130,15 @@ fun NotDefteriEkrani(
                 focusedBorderColor = MaterialTheme.colorScheme.primary,
                 unfocusedBorderColor = MaterialTheme.colorScheme.outline,
                 focusedLabelColor = MaterialTheme.colorScheme.primary,
-                unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant, // Use a contrasting color for unfocused label
+                unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 focusedTextColor = MaterialTheme.colorScheme.onSurface,
                 unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
                 cursorColor = MaterialTheme.colorScheme.primary,
-                // The background of the text field itself is usually handled by the default
-                // MaterialTheme surface color, or you can explicitly set it here if needed.
-                // containerColor = MaterialTheme.colorScheme.surface // Example for setting container color
             )
         )
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Input field for note content
         OutlinedTextField(
             value = yeniIcerik,
             onValueChange = { yeniIcerik = it },
@@ -142,27 +155,58 @@ fun NotDefteriEkrani(
             )
         )
 
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Hatırlatma zamanı seçme butonu ve gösterimi
+        Button(onClick = { showDatePicker = true }) {
+            Text(
+                text = hatirlatmaZamani?.let {
+                    "Hatırlatma: " + SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(it))
+                } ?: "Hatırlatma Zamanı Seç"
+            )
+        }
+
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Save button
         Button(
             onClick = {
                 if (yeniBaslik.isNotBlank() || yeniIcerik.isNotBlank()) {
-                    notlar = notlar + Note(title = yeniBaslik, content = yeniIcerik)
-                    kaydetNotlar(context, notlar) // Save updated list
-                    yeniBaslik = "" // Clear input fields
+                    val yeniNot = Note(
+                        title = yeniBaslik,
+                        content = yeniIcerik,
+                        reminderTime = hatirlatmaZamani
+                    )
+                    notlar = notlar + yeniNot
+                    kaydetNotlar(context, notlar)
+
+                    // Bildirim kur
+                    if (hatirlatmaZamani != null && hatirlatmaZamani!! > System.currentTimeMillis()) {
+                        val intent = Intent(context, ReminderReceiver::class.java).apply {
+                            putExtra("title", yeniBaslik)
+                            putExtra("content", yeniIcerik)
+                        }
+                        val pendingIntent = PendingIntent.getBroadcast(
+                            context,
+                            yeniBaslik.hashCode(),
+                            intent,
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+                        )
+                        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                        alarmManager.setExact(AlarmManager.RTC_WAKEUP, hatirlatmaZamani!!, pendingIntent)
+                    }
+
+                    yeniBaslik = ""
                     yeniIcerik = ""
+                    hatirlatmaZamani = null
                 }
             },
-            modifier = Modifier.fillMaxWidth(),
-            // Button colors will come from the MaterialTheme's primary and onPrimary colors
+            modifier = Modifier.fillMaxWidth()
         ) {
             Text("Kaydet")
         }
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Section title for notes and "Delete All" button
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -174,74 +218,78 @@ fun NotDefteriEkrani(
                 color = MaterialTheme.colorScheme.onBackground
             )
             OutlinedButton(onClick = {
-                notlar = emptyList() // Clear all notes
-                kaydetNotlar(context, notlar) // Save empty list
+                notlar = emptyList()
+                kaydetNotlar(context, notlar)
             }) {
                 Text("Hepsini Sil")
             }
         }
 
-        // List of notes
         LazyColumn(
-            modifier = Modifier.fillMaxWidth() // Make LazyColumn fill width
+            modifier = Modifier.fillMaxWidth()
         ) {
             items(notlar) { not ->
-                // State for dropdown menu visibility and rename dialog
                 var showMenu by remember { mutableStateOf(false) }
                 var yeniBaslikDialog by remember { mutableStateOf(not.title) }
                 var dialogGoster by remember { mutableStateOf(false) }
 
-                Card( // Using Card for better visual separation and elevation
+                Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 4.dp)
                         .combinedClickable(
-                            onClick = { /* Handle single click if needed */ },
+                            onClick = { /* tıklama isteğe bağlı */ },
                             onLongClick = { showMenu = true }
                         ),
-                    colors = CardDefaults.cardColors( // Set card background based on theme
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant // Use surfaceVariant for card background
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
                     )
                 ) {
-                    Column(modifier = Modifier.padding(12.dp)) { // Padding inside the card
+                    Column(modifier = Modifier.padding(12.dp)) {
                         Text(
                             text = not.title,
                             fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.titleMedium, // Use titleMedium for note title
-                            color = MaterialTheme.colorScheme.onSurfaceVariant // Text color on surfaceVariant
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = not.content,
-                            style = MaterialTheme.typography.bodyMedium, // Use bodyMedium for note content
+                            style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = "🕓 " + SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(not.timestamp),
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f) // Slightly faded timestamp
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                         )
+                        not.reminderTime?.let {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "⏰ " + SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(it),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
                         if (not.isFavorite) {
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 "⭐ Favori",
-                                color = MaterialTheme.colorScheme.primary, // Favorite star color
+                                color = MaterialTheme.colorScheme.primary,
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
                     }
 
-                    // Dropdown menu for note actions
                     DropdownMenu(
                         expanded = showMenu,
                         onDismissRequest = { showMenu = false },
-                        // DropdownMenu background will adapt from MaterialTheme.colorScheme.surface
                     ) {
                         DropdownMenuItem(
                             text = { Text("Sil") },
                             onClick = {
-                                notlar = notlar - not // Remove note from list
+                                notlar = notlar - not
                                 kaydetNotlar(context, notlar)
                                 showMenu = false
                             }
@@ -249,22 +297,23 @@ fun NotDefteriEkrani(
                         DropdownMenuItem(
                             text = { Text("Adını Değiştir") },
                             onClick = {
-                                dialogGoster = true // Show rename dialog
+                                dialogGoster = true
                                 showMenu = false
                             }
                         )
                         DropdownMenuItem(
                             text = { Text("Üste Taşı") },
                             onClick = {
-                                notlar = listOf(not) + notlar.filter { it != not } // Move note to top
+                                notlar = listOf(not) + notlar.filter { it != not }
                                 kaydetNotlar(context, notlar)
                                 showMenu = false
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text(if (not.isFavorite) "⭐ Favoriden Kaldır" else "⭐ Favori Olarak İşaretle") },
+                            text = {
+                                Text(if (not.isFavorite) "⭐ Favoriden Kaldır" else "⭐ Favori Olarak İşaretle")
+                            },
                             onClick = {
-                                // Toggle favorite status
                                 notlar = notlar.map {
                                     if (it == not) it.copy(isFavorite = !it.isFavorite) else it
                                 }
@@ -274,7 +323,6 @@ fun NotDefteriEkrani(
                         )
                     }
 
-                    // Dialog for renaming note title
                     if (dialogGoster) {
                         AlertDialog(
                             onDismissRequest = { dialogGoster = false },
@@ -312,25 +360,63 @@ fun NotDefteriEkrani(
                                     Text("İptal")
                                 }
                             },
-                            containerColor = MaterialTheme.colorScheme.surface, // Dialog background
-                            titleContentColor = MaterialTheme.colorScheme.onSurface, // Dialog title color
-                            textContentColor = MaterialTheme.colorScheme.onSurface // Dialog text color
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            titleContentColor = MaterialTheme.colorScheme.onSurface,
+                            textContentColor = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
             }
         }
     }
+
+    // DatePickerDialog ve TimePickerDialog çağrıları
+    if (showDatePicker) {
+        DatePickerDialog(
+            context,
+            { _, yil, ay, gun ->
+                val calendar = Calendar.getInstance().apply {
+                    set(Calendar.YEAR, yil)
+                    set(Calendar.MONTH, ay)
+                    set(Calendar.DAY_OF_MONTH, gun)
+                }
+                hatirlatmaZamani = calendar.timeInMillis
+                showDatePicker = false
+                showTimePicker = true
+            },
+            Calendar.getInstance().get(Calendar.YEAR),
+            Calendar.getInstance().get(Calendar.MONTH),
+            Calendar.getInstance().get(Calendar.DAY_OF_MONTH)
+        ).show()
+    }
+
+    if (showTimePicker) {
+        val calendar = Calendar.getInstance()
+        TimePickerDialog(
+            context,
+            { _, saat, dakika ->
+                hatirlatmaZamani = hatirlatmaZamani?.let {
+                    Calendar.getInstance().apply {
+                        timeInMillis = it
+                        set(Calendar.HOUR_OF_DAY, saat)
+                        set(Calendar.MINUTE, dakika)
+                    }.timeInMillis
+                }
+                showTimePicker = false
+            },
+            calendar.get(Calendar.HOUR_OF_DAY),
+            calendar.get(Calendar.MINUTE),
+            true
+        ).show()
+    }
 }
 
-// Function to save notes to SharedPreferences
 fun kaydetNotlar(context: Context, notlar: List<Note>) {
     val prefs = context.getSharedPreferences("notlarPrefs", Context.MODE_PRIVATE)
     val json = Gson().toJson(notlar)
     prefs.edit().putString("notListesi", json).apply()
 }
 
-// Function to load notes from SharedPreferences
 fun yukleNotlar(context: Context): List<Note> {
     val prefs = context.getSharedPreferences("notlarPrefs", Context.MODE_PRIVATE)
     val json = prefs.getString("notListesi", null)
@@ -342,11 +428,30 @@ fun yukleNotlar(context: Context): List<Note> {
     }
 }
 
-// Optional: Preview function for your Composable (for design view in Android Studio)
+// Hatırlatma bildirimini gösteren BroadcastReceiver
+class ReminderReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val title = intent.getStringExtra("title") ?: "Hatırlatma"
+        val content = intent.getStringExtra("content") ?: ""
+
+        val notification = NotificationCompat.Builder(context, "NOT_CHANNEL_ID")
+            .setSmallIcon(android.R.drawable.ic_dialog_info) // İkon değiştirebilirsin
+            .setContentTitle(title)
+            .setContentText(content)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+
+        val notificationManager =
+            ContextCompat.getSystemService(context, NotificationManager::class.java) as NotificationManager
+
+        notificationManager.notify(title.hashCode(), notification)
+    }
+}
+
 @Preview(showBackground = true)
 @Composable
 fun NotDefteriPreview() {
-    MaterialTheme(colorScheme = LightColorScheme) { // Or DarkColorScheme for a dark preview
+    MaterialTheme(colorScheme = LightColorScheme) {
         NotDefteriEkrani(isDark = false, onToggleTheme = {})
     }
 }
